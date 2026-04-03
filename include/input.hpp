@@ -23,6 +23,8 @@ struct InputSnapshot {
     bool inventorySelectPressed = false;
     bool clickPrimaryPressed = false;
     bool clickSecondaryPressed = false;
+    bool primaryHeld = false;
+    bool secondaryHeld = false;
     int hotbarSelection = 0;
     float mouseDx = 0.0f;
     float mouseDy = 0.0f;

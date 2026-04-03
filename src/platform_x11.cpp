@@ -69,6 +69,10 @@ bool Platform::create(const PlatformConfig& config, std::string& error) {
     }
 
     XStoreName(display_, window_, config.title.c_str());
+    XWMHints wmHints {};
+    wmHints.flags = InputHint;
+    wmHints.input = True;
+    XSetWMHints(display_, window_, &wmHints);
     wmDeleteMessage_ = XInternAtom(display_, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(display_, window_, &wmDeleteMessage_, 1);
 
@@ -89,6 +93,7 @@ bool Platform::create(const PlatformConfig& config, std::string& error) {
     hiddenCursor_ = XCreatePixmapCursor(display_, blank, blank, &black, &black, 0, 0);
     XFreePixmap(display_, blank);
     XSync(display_, False);
+    refreshFocusState();
 
     keyW_ = XKeysymToKeycode(display_, XK_w);
     keyA_ = XKeysymToKeycode(display_, XK_a);
@@ -114,13 +119,15 @@ bool Platform::create(const PlatformConfig& config, std::string& error) {
     slotKeys_[4] = XKeysymToKeycode(display_, XK_5);
     slotKeys_[5] = XKeysymToKeycode(display_, XK_6);
     slotKeys_[6] = XKeysymToKeycode(display_, XK_7);
+    slotKeys_[7] = XKeysymToKeycode(display_, XK_8);
+    slotKeys_[8] = XKeysymToKeycode(display_, XK_9);
 
     startTime_ = std::chrono::steady_clock::now();
     lastFrameTime_ = 0.0;
     open_ = true;
-    focused_ = false;
     mouseCaptured_ = false;
     resetKeyboardState();
+    refreshFocusState();
     return true;
 }
 
@@ -150,6 +157,18 @@ void Platform::destroy() {
 
     open_ = false;
     focused_ = false;
+}
+
+void Platform::refreshFocusState() {
+    if (display_ == nullptr || window_ == 0) {
+        focused_ = false;
+        return;
+    }
+
+    Window focusedWindow = 0;
+    int revertTo = RevertToNone;
+    XGetInputFocus(display_, &focusedWindow, &revertTo);
+    focused_ = focusedWindow == window_;
 }
 
 PlatformFrame Platform::pollFrame() {
@@ -198,11 +217,14 @@ PlatformFrame Platform::pollFrame() {
                 break;
             case KeyRelease:
                 if (!isAutoRepeatRelease(event) && isValidKeycode(event.xkey.keycode)) {
-                    pressedKeys_[event.xkey.keycode] = false;
+                    pressedKeys_[static_cast<std::size_t>(event.xkey.keycode)] = false;
                 }
                 break;
             case ButtonPress:
                 if (event.xbutton.button == Button1) {
+                    if (!mouseCaptured_) {
+                        focused_ = true;
+                    }
                     if (focused_ && !mouseCaptured_) {
                         captureMouse();
                     } else if (mouseCaptured_) {
@@ -217,7 +239,11 @@ PlatformFrame Platform::pollFrame() {
         }
     }
 
-    if (focused_) {
+    refreshFocusState();
+
+    const bool inputActive = focused_ || mouseCaptured_;
+
+    if (inputActive) {
         syncKeyboardState();
         if (mouseCaptured_) {
             updateMouseDelta(frame.input);
@@ -228,7 +254,7 @@ PlatformFrame Platform::pollFrame() {
 
     applyDiscreteInput(frame.input);
     updateContinuousInput(frame.input);
-    frame.input.focused = focused_;
+    frame.input.focused = inputActive;
     frame.input.mouseCaptured = mouseCaptured_;
 
     if (!open_) {
@@ -250,7 +276,7 @@ void Platform::setTitle(const std::string& title) {
 }
 
 void Platform::captureMouse() {
-    if (display_ == nullptr || window_ == 0 || !focused_ || mouseCaptured_) {
+    if (display_ == nullptr || window_ == 0 || mouseCaptured_) {
         return;
     }
 
@@ -262,6 +288,7 @@ void Platform::captureMouse() {
     }
 
     mouseCaptured_ = true;
+    focused_ = true;
     XDefineCursor(display_, window_, hiddenCursor_);
     centerCursor();
     XFlush(display_);
@@ -303,6 +330,8 @@ void Platform::updateMouseDelta(InputSnapshot& input) {
     const int centerY = height_ / 2;
     input.mouseDx = static_cast<float>(winX - centerX);
     input.mouseDy = static_cast<float>(winY - centerY);
+    input.primaryHeld = (mask & Button1Mask) != 0;
+    input.secondaryHeld = (mask & Button3Mask) != 0;
 
     if (winX != centerX || winY != centerY) {
         centerCursor();
@@ -327,10 +356,11 @@ void Platform::syncKeyboardState() {
             return;
         }
         const bool down = queryKeyState(keymap, keycode);
-        if (down && !pressedKeys_[keycode]) {
-            pressedThisFrame_[keycode] = true;
+        const std::size_t index = static_cast<std::size_t>(keycode);
+        if (down && !pressedKeys_[index]) {
+            pressedThisFrame_[index] = true;
         }
-        pressedKeys_[keycode] = down;
+        pressedKeys_[index] = down;
     };
 
     syncKey(keyW_);
@@ -382,10 +412,11 @@ void Platform::handleKeyPress(KeyCode keycode) {
     if (!isValidKeycode(keycode)) {
         return;
     }
-    if (!pressedKeys_[keycode]) {
-        pressedThisFrame_[keycode] = true;
+    const std::size_t index = static_cast<std::size_t>(keycode);
+    if (!pressedKeys_[index]) {
+        pressedThisFrame_[index] = true;
     }
-    pressedKeys_[keycode] = true;
+    pressedKeys_[index] = true;
 }
 
 void Platform::updateContinuousInput(InputSnapshot& input) const {
@@ -399,11 +430,11 @@ void Platform::updateContinuousInput(InputSnapshot& input) const {
 }
 
 bool Platform::isPressed(KeyCode keycode) const {
-    return keycode != 0 && keycode < static_cast<KeyCode>(pressedKeys_.size()) && pressedKeys_[keycode];
+    return isValidKeycode(keycode) && pressedKeys_[static_cast<std::size_t>(keycode)];
 }
 
 bool Platform::wasPressedThisFrame(KeyCode keycode) const {
-    return keycode != 0 && keycode < static_cast<KeyCode>(pressedThisFrame_.size()) && pressedThisFrame_[keycode];
+    return isValidKeycode(keycode) && pressedThisFrame_[static_cast<std::size_t>(keycode)];
 }
 
 bool Platform::isAutoRepeatRelease(const XEvent& event) const {

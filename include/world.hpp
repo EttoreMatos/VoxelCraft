@@ -59,7 +59,9 @@ public:
     }
 
     [[nodiscard]] std::optional<PlayerState> initialPlayerState() const;
+    [[nodiscard]] std::optional<InventoryState> initialInventory() const;
     void storePlayerState(const PlayerState& player);
+    void storeInventory(const InventoryState& inventory);
 
     void warmStart(const ChunkCoord& center, int radius = 1);
     void updateStreaming(const ChunkCoord& center);
@@ -97,6 +99,7 @@ private:
     WorldPersistence persistence_;
     std::uint32_t seed_ = 0;
     std::optional<PlayerState> savedPlayerState_;
+    std::optional<InventoryState> savedInventory_;
     bool metaDirty_ = false;
     std::map<ChunkCoord, std::unique_ptr<Chunk>> loadedChunks_;
 };

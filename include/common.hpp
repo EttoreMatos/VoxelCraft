@@ -17,6 +17,13 @@ constexpr int kChunkVolume = kChunkSizeX * kChunkSizeY * kChunkSizeZ;
 constexpr int kActiveRadius = 4;
 constexpr int kRenderRadius = 3;
 constexpr int kAtlasGridSize = 4;
+constexpr int kHotbarSlotCount = 9;
+constexpr int kStorageSlotCount = 27;
+constexpr int kInventorySlotCount = kHotbarSlotCount + kStorageSlotCount;
+constexpr int kInventoryColumns = 9;
+constexpr int kInventoryRows = kInventorySlotCount / kInventoryColumns;
+constexpr int kInventoryHotbarOffset = kStorageSlotCount;
+constexpr int kMaxStackCount = 64;
 constexpr float kPlayerRadius = 0.35f;
 constexpr float kPlayerHeight = 1.8f;
 constexpr float kCameraHeight = 1.62f;
@@ -138,6 +145,33 @@ struct PlayerState {
     bool onGround = false;
 };
 
+struct ItemStack {
+    BlockId block = BlockId::Air;
+    std::uint8_t count = 0;
+
+    [[nodiscard]] bool empty() const {
+        return block == BlockId::Air || count == 0;
+    }
+
+    void clear() {
+        block = BlockId::Air;
+        count = 0;
+    }
+};
+
+struct InventoryState {
+    std::array<ItemStack, kInventorySlotCount> slots {};
+    std::uint8_t selectedHotbarSlot = 0;
+};
+
+struct DroppedItem {
+    ItemStack stack;
+    Vec3 position;
+    Vec3 velocity;
+    float ageSeconds = 0.0f;
+    float pickupDelaySeconds = 0.0f;
+};
+
 struct RaycastHit {
     IVec3 block;
     IVec3 previousEmpty;
@@ -201,6 +235,17 @@ inline float clampf(float value, float low, float high) {
 
 inline bool isSolid(BlockId block) {
     return block != BlockId::Air;
+}
+
+inline ItemStack makeStack(BlockId block, int count) {
+    if (block == BlockId::Air || count <= 0) {
+        return {};
+    }
+    return {block, static_cast<std::uint8_t>(std::clamp(count, 0, kMaxStackCount))};
+}
+
+inline bool canStacksMerge(const ItemStack& lhs, const ItemStack& rhs) {
+    return !lhs.empty() && !rhs.empty() && lhs.block == rhs.block;
 }
 
 inline Color3 blockColor(BlockId block) {
@@ -335,6 +380,49 @@ inline const std::array<BlockId, 11>& creativeBlockCatalog() {
         BlockId::Snow,
     };
     return catalog;
+}
+
+inline BlockId droppedBlockForBlock(BlockId block) {
+    switch (block) {
+        case BlockId::Grass:
+            return BlockId::Dirt;
+        case BlockId::Stone:
+            return BlockId::Cobblestone;
+        case BlockId::Air:
+            return BlockId::Air;
+        default:
+            return block;
+    }
+}
+
+inline float breakDurationSeconds(BlockId block) {
+    switch (block) {
+        case BlockId::Grass:
+            return 0.50f;
+        case BlockId::Dirt:
+            return 0.45f;
+        case BlockId::Stone:
+            return 0.90f;
+        case BlockId::Sand:
+            return 0.45f;
+        case BlockId::Wood:
+            return 0.75f;
+        case BlockId::Leaves:
+            return 0.18f;
+        case BlockId::Brick:
+            return 1.10f;
+        case BlockId::Cobblestone:
+            return 0.95f;
+        case BlockId::Planks:
+            return 0.55f;
+        case BlockId::Gravel:
+            return 0.50f;
+        case BlockId::Snow:
+            return 0.15f;
+        case BlockId::Air:
+        default:
+            return 0.0f;
+    }
 }
 
 }  // namespace voxel

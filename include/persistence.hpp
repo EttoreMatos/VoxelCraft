@@ -12,12 +12,15 @@ namespace voxel {
 struct WorldMeta {
     std::uint32_t seed = 0;
     PlayerState player;
+    InventoryState inventory;
     bool hasPlayerState = false;
+    bool hasInventory = false;
 };
 
 class WorldPersistence {
 public:
-    static constexpr std::uint32_t kSaveVersion = 2;
+    static constexpr std::uint32_t kMetaVersion = 3;
+    static constexpr std::uint32_t kChunkVersion = 2;
 
     WorldPersistence(std::filesystem::path saveRoot, std::string worldName);
 

@@ -23,6 +23,16 @@ std::filesystem::path makeTempRoot() {
     return std::filesystem::temp_directory_path() / ("voxelcraft_test_" + std::to_string(stamp));
 }
 
+int countItems(const std::array<voxel::ItemStack, voxel::kInventorySlotCount>& slots, voxel::BlockId block) {
+    int total = 0;
+    for (const voxel::ItemStack& slot : slots) {
+        if (!slot.empty() && slot.block == block) {
+            total += slot.count;
+        }
+    }
+    return total;
+}
+
 void testChunkIndexing() {
     using namespace voxel;
     check(Chunk::index(0, 0, 0) == 0, "chunk index origin");
@@ -66,6 +76,12 @@ void testSaveLoadRoundTrip(const std::filesystem::path& root) {
         player.pitchDegrees = -12.0f;
         player.flying = true;
         world.storePlayerState(player);
+
+        voxel::InventoryState inventory;
+        inventory.selectedHotbarSlot = 4;
+        inventory.slots[voxel::kInventoryHotbarOffset + 4] = voxel::makeStack(voxel::BlockId::Stone, 23);
+        inventory.slots[7] = voxel::makeStack(voxel::BlockId::Wood, 6);
+        world.storeInventory(inventory);
         world.flushAll();
     }
 
@@ -78,6 +94,14 @@ void testSaveLoadRoundTrip(const std::filesystem::path& root) {
         if (savedPlayer.has_value()) {
             check(std::abs(savedPlayer->position.x - 4.5f) < 0.001f, "player x reloads");
             check(savedPlayer->flying, "player flying flag reloads");
+        }
+
+        const auto savedInventory = reloaded.initialInventory();
+        check(savedInventory.has_value(), "inventory state reloads from meta");
+        if (savedInventory.has_value()) {
+            check(savedInventory->selectedHotbarSlot == 4, "selected hotbar reloads");
+            check(savedInventory->slots[voxel::kInventoryHotbarOffset + 4].count == 23, "hotbar stack reloads");
+            check(savedInventory->slots[7].block == voxel::BlockId::Wood, "storage stack block reloads");
         }
     }
 }
@@ -107,6 +131,15 @@ void testCollision(const std::filesystem::path& root) {
 }
 
 void testSessionMovementAndInventory(const std::filesystem::path& root) {
+    {
+        voxel::World setup({.worldName = "session", .seed = 555U, .saveRoot = root});
+        voxel::InventoryState inventory;
+        inventory.selectedHotbarSlot = 2;
+        inventory.slots[voxel::kInventoryHotbarOffset + 2] = voxel::makeStack(voxel::BlockId::Dirt, 10);
+        setup.storeInventory(inventory);
+        setup.flushAll();
+    }
+
     voxel::GameSession session({.worldName = "session", .seed = 555U, .saveRoot = root});
     session.initialize();
 
@@ -118,24 +151,112 @@ void testSessionMovementAndInventory(const std::filesystem::path& root) {
     check(std::abs(after.x - before.x) > 0.001f || std::abs(after.z - before.z) > 0.001f,
           "session moves the player");
 
-    voxel::InputSnapshot chooseSlot;
-    chooseSlot.hotbarSelection = 3;
-    session.update(0.016f, chooseSlot);
-    check(session.selectedSlot() == 2, "numeric hotbar input updates selected slot");
+    check(session.selectedSlot() == 2, "selected slot loads from saved inventory");
+    check(session.hotbarSlot(2).block == voxel::BlockId::Dirt && session.hotbarSlot(2).count == 10,
+          "hotbar stack loads");
 
     voxel::InputSnapshot openInventory;
     openInventory.toggleInventoryPressed = true;
     session.update(0.016f, openInventory);
     check(session.inventoryOpen(), "inventory toggles open");
+    check(session.inventoryCursor() == voxel::kInventoryHotbarOffset + 2, "inventory cursor opens on selected hotbar");
 
-    voxel::InputSnapshot moveCursor;
-    moveCursor.inventoryRightPressed = true;
-    session.update(0.016f, moveCursor);
+    voxel::InputSnapshot pickStack;
+    pickStack.inventorySelectPressed = true;
+    session.update(0.016f, pickStack);
+    check(session.carriedStack().block == voxel::BlockId::Dirt && session.carriedStack().count == 10,
+          "inventory primary action picks up stack");
+    check(session.hotbarSlot(2).empty(), "picked stack leaves hotbar empty");
 
-    voxel::InputSnapshot pickBlock;
-    pickBlock.inventorySelectPressed = true;
-    session.update(0.016f, pickBlock);
-    check(session.hotbar()[2] == voxel::BlockId::Dirt, "inventory selection writes into selected hotbar slot");
+    voxel::InputSnapshot moveCursorUp;
+    moveCursorUp.inventoryUpPressed = true;
+    session.update(0.016f, moveCursorUp);
+    check(session.inventoryCursor() == 20, "inventory cursor moves into storage row");
+
+    voxel::InputSnapshot placeStack;
+    placeStack.inventorySelectPressed = true;
+    session.update(0.016f, placeStack);
+    check(session.inventorySlots()[20].count == 10, "inventory primary action places carried stack");
+    check(session.carriedStack().empty(), "placing stack clears carried item");
+
+    voxel::InputSnapshot pickHalf;
+    pickHalf.clickSecondaryPressed = true;
+    session.update(0.016f, pickHalf);
+    check(session.carriedStack().count == 5, "inventory secondary action splits stack");
+    check(session.inventorySlots()[20].count == 5, "inventory secondary action leaves half behind");
+
+    session.shutdown();
+}
+
+void testSessionMiningAndDrops(const std::filesystem::path& root) {
+    {
+        voxel::World setup({.worldName = "mining", .seed = 999U, .saveRoot = root});
+        setup.warmStart({0, 0}, 0);
+        setup.setBlock(1, 40, 0, voxel::BlockId::Stone);
+
+        voxel::PlayerState player;
+        player.position = {0.5f, 40.0f, 0.5f};
+        player.yawDegrees = 270.0f;
+        player.pitchDegrees = -48.0f;
+        player.flying = true;
+        setup.storePlayerState(player);
+        setup.flushAll();
+    }
+
+    voxel::GameSession session({.worldName = "mining", .seed = 999U, .saveRoot = root});
+    session.initialize();
+
+    voxel::InputSnapshot mine;
+    mine.mouseCaptured = true;
+    mine.primaryHeld = true;
+    for (int step = 0; step < 14; ++step) {
+        session.update(0.10f, mine);
+    }
+
+    check(session.world().getBlock(1, 40, 0) == voxel::BlockId::Air, "mining breaks the block after delay");
+    check(!session.breakingBlock().has_value(), "mining resets break state after block breaks");
+
+    voxel::InputSnapshot idle;
+    for (int step = 0; step < 25; ++step) {
+        session.update(0.05f, idle);
+    }
+
+    check(countItems(session.inventorySlots(), voxel::BlockId::Cobblestone) == 1, "broken stone drops cobblestone and gets picked up");
+    check(session.droppedItems().empty(), "picked up drops leave the world");
+
+    session.shutdown();
+}
+
+void testSessionPlacementConsumesStack(const std::filesystem::path& root) {
+    {
+        voxel::World setup({.worldName = "placement", .seed = 444U, .saveRoot = root});
+        setup.warmStart({0, 0}, 0);
+        setup.setBlock(2, 40, 0, voxel::BlockId::Stone);
+
+        voxel::PlayerState player;
+        player.position = {0.5f, 40.0f, 0.5f};
+        player.yawDegrees = 270.0f;
+        player.pitchDegrees = -37.0f;
+        player.flying = true;
+        setup.storePlayerState(player);
+
+        voxel::InventoryState inventory;
+        inventory.selectedHotbarSlot = 0;
+        inventory.slots[voxel::kInventoryHotbarOffset] = voxel::makeStack(voxel::BlockId::Dirt, 1);
+        setup.storeInventory(inventory);
+        setup.flushAll();
+    }
+
+    voxel::GameSession session({.worldName = "placement", .seed = 444U, .saveRoot = root});
+    session.initialize();
+
+    voxel::InputSnapshot place;
+    place.mouseCaptured = true;
+    place.clickSecondaryPressed = true;
+    session.update(0.016f, place);
+
+    check(session.world().getBlock(1, 40, 0) == voxel::BlockId::Dirt, "placing targets the previous empty block");
+    check(session.hotbarSlot(0).empty(), "placing consumes one block from selected stack");
 
     session.shutdown();
 }
@@ -147,6 +268,8 @@ void testVisualMappings() {
     check(atlasTileIndexForFace(BlockId::Wood, 2) == 6, "log top tile mapping");
     check(atlasTileIndexForIcon(BlockId::Cobblestone) == 9, "cobblestone icon mapping");
     check(creativeBlockCatalog().size() == 11, "creative inventory catalog size");
+    check(droppedBlockForBlock(BlockId::Stone) == BlockId::Cobblestone, "stone drop mapping");
+    check(breakDurationSeconds(BlockId::Leaves) < breakDurationSeconds(BlockId::Stone), "leaf break time faster than stone");
 }
 
 }  // namespace
@@ -163,6 +286,8 @@ int main() {
         testRaycast(root);
         testCollision(root);
         testSessionMovementAndInventory(root);
+        testSessionMiningAndDrops(root);
+        testSessionPlacementConsumesStack(root);
         testVisualMappings();
 
         std::filesystem::remove_all(root);

@@ -162,6 +162,9 @@ World::World(WorldConfig config)
         if (meta.hasPlayerState) {
             savedPlayerState_ = meta.player;
         }
+        if (meta.hasInventory) {
+            savedInventory_ = meta.inventory;
+        }
     } else {
         seed_ = config_.seed == 0 ? 13371337U : config_.seed;
         meta.seed = seed_;
@@ -173,8 +176,17 @@ std::optional<PlayerState> World::initialPlayerState() const {
     return savedPlayerState_;
 }
 
+std::optional<InventoryState> World::initialInventory() const {
+    return savedInventory_;
+}
+
 void World::storePlayerState(const PlayerState& player) {
     savedPlayerState_ = player;
+    metaDirty_ = true;
+}
+
+void World::storeInventory(const InventoryState& inventory) {
+    savedInventory_ = inventory;
     metaDirty_ = true;
 }
 
@@ -476,12 +488,16 @@ void World::flushAll() {
         }
     }
 
-    if (metaDirty_ || savedPlayerState_.has_value()) {
+    if (metaDirty_ || savedPlayerState_.has_value() || savedInventory_.has_value()) {
         WorldMeta meta;
         meta.seed = seed_;
         meta.hasPlayerState = savedPlayerState_.has_value();
         if (savedPlayerState_.has_value()) {
             meta.player = *savedPlayerState_;
+        }
+        meta.hasInventory = savedInventory_.has_value();
+        if (savedInventory_.has_value()) {
+            meta.inventory = *savedInventory_;
         }
         if (persistence_.saveMeta(meta)) {
             metaDirty_ = false;

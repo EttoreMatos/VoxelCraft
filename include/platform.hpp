@@ -42,6 +42,7 @@ public:
 
 private:
     void destroy();
+    void refreshFocusState();
     void captureMouse();
     void releaseMouse();
     void centerCursor();
@@ -71,7 +72,7 @@ private:
     double lastFrameTime_ = 0.0;
     std::array<bool, 256> pressedKeys_ {};
     std::array<bool, 256> pressedThisFrame_ {};
-    std::array<KeyCode, 7> slotKeys_ {};
+    std::array<KeyCode, 9> slotKeys_ {};
     KeyCode keyW_ = 0;
     KeyCode keyA_ = 0;
     KeyCode keyS_ = 0;
